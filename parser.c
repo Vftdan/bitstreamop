@@ -309,7 +309,7 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 				switch (parser->next_char_class) {
 				case CHCLS_UNKNOWN:
 				case CHCLS_INVAL:
-					fprintf(stderr, "Unexpectes byte: \\x%02x", parser->next_char);
+					fprintf(stderr, "Unexpected byte: \\x%02x\n", parser->next_char);
 					exit(1);
 				case CHCLS_WS:
 					break;
@@ -518,6 +518,9 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 							parser->stack_terminator = ')';
 						}
 						break;
+					default:
+						fprintf(stderr, "Unexpected punctuation: '%c'\n", parser->next_char);
+						exit(1);
 					}
 				}
 				parser->next_char = 0;
