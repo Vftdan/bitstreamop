@@ -673,5 +673,17 @@ parser_end(Parser * parser)
 		parser_pop_state(parser);
 		parser_feed(parser, NULL, 0);
 	}
+	if (!parser->parsed_node) {
+		ExprNode * statement_list_node = malloc(sizeof(ExprNode));
+		if (!statement_list_node) {
+			fprintf(stderr, "Failed to allocate expression node\n");
+			exit(1);
+		}
+		statement_list_node->destructor = parsed_expr_node_destructor;
+		statement_list_node->node_type = EXPRNODE_StatementList;
+		statement_list_node->as_StatementList.length = 0;
+		statement_list_node->as_StatementList.args = NULL;
+		parser->parsed_node = statement_list_node;
+	}
 	return parser->parsed_node;
 }
