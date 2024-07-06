@@ -82,7 +82,7 @@ BITSTREAMOP_FUNCTION(bit_and, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAM
 
 BITSTREAMOP_FUNCTION(bit_or, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
 	return (WidthInteger) {
-		.value = args->lhs.value & args->rhs.value,
+		.value = args->lhs.value | args->rhs.value,
 		.width = MAX(args->lhs.width, args->rhs.width),
 	};
 ))
