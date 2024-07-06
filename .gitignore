@@ -1,0 +1,4 @@
+*.o
+bitstreamop
+tags
+compile_flags.txt

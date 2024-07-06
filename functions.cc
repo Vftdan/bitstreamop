@@ -1,0 +1,64 @@
+#if defined(BITSTREAMOP_FUNCTION)
+
+BITSTREAMOP_FUNCTION(read, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(amount)), (
+	BitUSize amount = (BitUSize) args->amount.value;
+	if (amount > 64)
+		die("Cannot read more than 64 bits");
+	uint64_t result_n = 0;
+	BitSlice result_slice = BIT_SLICE_REFERENCE_INT(result_n);
+	bit_io_read(context->io_in, &result_slice, amount);
+	result_n = be64toh(result_n) >> (64 - amount);
+	return (WidthInteger) {
+		.value = result_n,
+		.width = amount,
+	};
+))
+
+BITSTREAMOP_FUNCTION(write, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(value)), (
+	uint64_t amount = args->value.width;
+	uint64_t value_n = args->value.value;
+	value_n = htobe64(value_n << (64 - amount));
+	BitConstSlice value_slice = BIT_SLICE_REFERENCE_INT(value_n);
+	bit_io_write(context->io_out, &value_slice, amount);
+	return (WidthInteger) {
+		.value = 0,
+		.width = 0,
+	};
+))
+
+BITSTREAMOP_FUNCTION(readeof, BITSTREAMOP_ARGLIST(), (
+	uint64_t result_n = 0;
+	result_n = feof(context->io_in->file) && !context->io_in->in_buffer.io_length;
+	if (context->io_in->in_eof) {
+		result_n = 1;
+	}
+	return (WidthInteger) {
+		.value = result_n,
+		.width = 1,
+	};
+))
+
+BITSTREAMOP_FUNCTION(not, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(value)), (
+	uint64_t value_n = args->value.value;
+	value_n = !value_n;
+	return (WidthInteger) {
+		.value = value_n,
+		.width = args->value.width,
+	};
+))
+
+BITSTREAMOP_FUNCTION(width, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(new_width) BITSTREAMOP_ARG(value)), (
+	return (WidthInteger) {
+		.value = args->value.value,
+		.width = args->new_width.value,
+	};
+))
+
+BITSTREAMOP_FUNCTION(mul, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
+	return (WidthInteger) {
+		.value = args->lhs.value * args->rhs.value,
+		.width = MAX(args->lhs.width, args->rhs.width),
+	};
+))
+
+#endif
