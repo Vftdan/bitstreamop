@@ -172,4 +172,29 @@ BITSTREAMOP_EXPRNODE(LoopWhile, (
 	}
 ))
 
+BITSTREAMOP_EXPRNODE(CondIf, (
+	struct expression_node *condition, *body;
+), self, ctx, result, (
+	scope_push(&ctx->scope);
+	WidthInteger condition = EVALUATE(*self->condition);
+	if (condition.value) {
+		*result = EVALUATE(*self->body);
+	}
+	scope_pop(&ctx->scope);
+), printer, (
+	printer->start_field(printer);
+	printer->printf(printer, "condition = %p", self->condition);
+	printer->end_field(printer);
+	if (self->condition) {
+		PRINT_CHILD(*self->condition);
+	}
+
+	printer->start_field(printer);
+	printer->printf(printer, "body = %p", self->body);
+	printer->end_field(printer);
+	if (self->body) {
+		PRINT_CHILD(*self->body);
+	}
+))
+
 #endif

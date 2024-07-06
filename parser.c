@@ -83,6 +83,12 @@ parsed_expr_node_destructor(ExprNode * node)
 		free(node->as_LoopWhile.body);
 		free(node->as_LoopWhile.condition);
 		break;
+	case EXPRNODE_CondIf:
+		destruct_expression(node->as_CondIf.body);
+		destruct_expression(node->as_CondIf.condition);
+		free(node->as_CondIf.body);
+		free(node->as_CondIf.condition);
+		break;
 	}
 }
 
@@ -466,6 +472,20 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 								parser->mode = PSMD_WAIT_POP;
 								parser_push_state(parser);
 								parser->stack_terminator = ')';
+							} else if (!strcmp(parser->parsed_identifier.ptr, "if")) {
+								ExprNode * cond_if_node = malloc(sizeof(ExprNode));
+								if (!cond_if_node) {
+									fprintf(stderr, "Failed to allocate expression node\n");
+									exit(1);
+								}
+								cond_if_node->destructor = parsed_expr_node_destructor;
+								cond_if_node->node_type = EXPRNODE_CondIf;
+								parser->parsed_node = cond_if_node;
+								free(parser->parsed_identifier.ptr);
+								parser->parsed_identifier = (CharSlice) { NULL, 0 };
+								parser->mode = PSMD_WAIT_POP;
+								parser_push_state(parser);
+								parser->stack_terminator = ')';
 							} else {
 								// Function
 								ExprNode * function_application_node = malloc(sizeof(ExprNode));
@@ -583,6 +603,23 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 						parser->mode = PSMD_NORMAL;
 					} else {
 						parser->parsed_node->as_LoopWhile.body = parser->popped_parsed_node;  // MOVE
+						parser->popped_parsed_node = NULL;
+						parser->expression_end = true;
+						parser->mode = PSMD_NORMAL;
+					}
+					break;
+				case EXPRNODE_CondIf:
+					if (!parser->call_iteration) {
+						// Consume character
+						parser->next_char = 0;
+						parser->next_char_class = CHCLS_UNKNOWN;
+						parser->parsed_node->as_CondIf.condition = parser->popped_parsed_node;  // MOVE
+						parser->popped_parsed_node = NULL;
+						parser->call_iteration = 1;
+						parser_push_state(parser);
+						parser->mode = PSMD_NORMAL;
+					} else {
+						parser->parsed_node->as_CondIf.body = parser->popped_parsed_node;  // MOVE
 						parser->popped_parsed_node = NULL;
 						parser->expression_end = true;
 						parser->mode = PSMD_NORMAL;
