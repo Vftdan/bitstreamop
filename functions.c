@@ -12,8 +12,19 @@ die(char * msg)
 	exit(1);
 }
 
+static WidthInteger
+fix_width(WidthInteger value)
+{
+	if (!value.width) {
+		value.value = 0;
+	}
+	value.value &= (1ULL << value.width) - 1;
+	return value;
+}
+
 #define UNPACK(...) __VA_ARGS__
 #define MAX(a, b) ((a) < (b) ? (b) : (a))
+#define MIN(a, b) ((a) > (b) ? (b) : (a))
 
 // Implementations:
 #define BITSTREAMOP_FUNCTION(name, arglist, body) WidthInteger funcimpl_##name(InterpContext * context, Argtype_##name * args) { (void) context; (void) args; UNPACK body }
