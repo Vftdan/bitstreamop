@@ -13,5 +13,5 @@ run: bitstreamop
 
 .PHONY: all run
 
-bitstreamop: bitstreamop.o bitio.o functions.o expression.o parser.o tree_printer.o
+bitstreamop: bitstreamop.o bitio.o functions.o expression.o lexer.o parser.o tree_printer.o token_types.o
 	$(CC) $(LDFLAGS) $^ -o $@

@@ -1,3 +1,4 @@
+#include "lexer.h"
 #include "parser.h"
 #include "functions.h"
 #include "common.h"
@@ -6,37 +7,26 @@
 #define PUSH_DOWN_MEMBERS(struct_name, current_name, members) union { struct struct_name { UNPACK members } current_name; struct { UNPACK members }; };
 
 typedef enum {
-	CHCLS_UNKNOWN,
-	CHCLS_WS,
-	CHCLS_ALPH,
-	CHCLS_NUM,
-	CHCLS_PUNCT,
-	CHCLS_INVAL,
-} CharacterClass;
-
-typedef enum {
 	PSMD_NORMAL,
 	PSMD_WAIT_POP,
 	PSMD_GROUP,
 } ParserMode;
 
 struct parser {
-	CharSlice untokenized;
-	CharacterClass next_char_class;
-	char next_char;
+	Lexer * lexer;
+	TokenData * token;
 	bool code_end;  // No more code chunks expected
-	bool after_ident;  // We have parsed an identifier, but we don't yet know whether it is variable reference, assignment, or function call
 	PUSH_DOWN_MEMBERS(parser_stack_frame, stack_current, (
 		struct parser_stack_frame *stack_parent;
 		ParserMode mode;
 		ExprNode * parsed_node;
-		CharSlice parsed_identifier;
-		char stack_terminator;
 		bool pop_on_comma;
 		bool pop_before_semicolon;
 		bool after_comma;
 		bool expression_end;  // Expecting separator or closing parenthesis
 		int64_t call_iteration;
+		enum token_type stack_terminator;
+		TokenData * previous_token;
 	))
 	ExprNode * popped_parsed_node;
 };
@@ -87,97 +77,6 @@ parsed_expr_node_destructor(ExprNode * node)
 	}
 }
 
-static char
-chslc_shift(CharSlice * slc)
-{
-	if (!slc->ptr || !slc->length)
-		return 0;
-	char c = *slc->ptr;
-	++(slc->ptr);
-	--(slc->length);
-	return c;
-}
-
-static CharacterClass
-ch_classify(unsigned char ch)
-{
-	if (ch >= 127)
-		return CHCLS_INVAL;
-	if (ch <= ' ')
-		return CHCLS_WS;
-	if ('0' <= ch && ch <= '9')
-		return CHCLS_NUM;
-	if (
-		   (ch == '_')
-		|| ('A' <= ch && ch <= 'Z')
-		|| ('a' <= ch && ch <= 'z')
-	)
-		return CHCLS_ALPH;
-	return CHCLS_PUNCT;
-}
-
-static ssize_t
-find_word_end(CharSlice slc, bool last_chunk)
-{
-	for (size_t i = 0; i < slc.length; ++i) {
-		switch (ch_classify(slc.ptr[i])) {
-		case CHCLS_NUM:
-		case CHCLS_ALPH:
-			break;
-		default:
-			return i;
-		}
-	}
-	return last_chunk ? (ssize_t) slc.length : -1;
-}
-
-static WidthInteger
-parse_number(char * s, size_t length)
-{
-	while (*s == '0') {
-		++s;
-		--length;
-	}
-	int base = 10;
-	switch (*s) {
-	case 'd':
-	case 'D':
-		base = 10;
-		++s;
-		--length;
-		break;
-	case 'o':
-	case 'O':
-		base = 8;
-		++s;
-		--length;
-		break;
-	case 'b':
-	case 'B':
-		base = 2;
-		++s;
-		--length;
-		break;
-	case 'x':
-	case 'X':
-		base = 16;
-		++s;
-		--length;
-		break;
-	}
-	char *endptr;
-	// TODO can we expect to not have '\0' at s[length]?
-	uint64_t n = strtol(s, &endptr, base);
-	if (endptr < s + length) {
-		fprintf(stderr, "Trailing characters in numeric literal: %.*s\n", (int) (length - (endptr - s)), endptr);
-		exit(1);
-	}
-	return (WidthInteger) {
-		.value = n,
-		.width = 64,
-	};
-}
-
 Parser *
 parser_new()
 {
@@ -186,18 +85,10 @@ parser_new()
 		fprintf(stderr, "Failed to allocate parser\n");
 		exit(1);
 	}
-	char *buffer = malloc(16);
-	if (!buffer) {
-		fprintf(stderr, "Failed to allocate parser buffer\n");
-		exit(1);
-	}
+	Lexer *lexer = lexer_new();
 	*parser = (Parser) {
-		.untokenized = {
-			.ptr = buffer,
-			.length = 0,
-		},
-		.next_char_class = CHCLS_UNKNOWN,
-		.next_char = 0,
+		.lexer = lexer,
+		.code_end = false,
 	};
 	return parser;
 }
@@ -205,9 +96,9 @@ parser_new()
 void
 parser_delete(Parser * parser)
 {
-	if (parser->untokenized.ptr) {
-		free(parser->untokenized.ptr);
-		parser->untokenized.ptr = NULL;
+	if (parser->lexer) {
+		lexer_delete(parser->lexer);
+		parser->lexer = NULL;
 	}
 	if (parser->parsed_node) {
 		destruct_expression(parser->parsed_node);
@@ -215,21 +106,6 @@ parser_delete(Parser * parser)
 		parser->parsed_node = NULL;
 	}
 	free(parser);
-}
-
-static char *
-extend_untokenized_buffer(Parser * parser, size_t saved_last, size_t add_length)
-{
-	size_t new_length = saved_last + add_length;
-	if (!(parser->untokenized.ptr = realloc(parser->untokenized.ptr, new_length))) {
-		fprintf(stderr, "Failed to resize internal parser buffer\n");
-		exit(1);
-	}
-	if (saved_last) {
-		memmove(parser->untokenized.ptr, parser->untokenized.ptr + parser->untokenized.length - saved_last, saved_last);
-	}
-	parser->untokenized.length = new_length;
-	return parser->untokenized.ptr + saved_last;
 }
 
 static void
@@ -264,404 +140,334 @@ parser_pop_state(Parser * parser)
 }
 
 static void
-parser_before_expression_end(Parser * parser)
+parser_consume_token_at(TokenData **tokenptr)
 {
-	if (!parser->after_ident) {
+	if (!*tokenptr) {
 		return;
 	}
-	ExprNode * variable_node = malloc(sizeof(ExprNode));
-	if (!variable_node) {
+	destruct_token_data(*tokenptr);
+	free(*tokenptr);
+	*tokenptr = NULL;
+}
+
+static void
+parser_consume_token(Parser * parser)
+{
+	parser_consume_token_at(&parser->token);
+}
+
+static ExprNode *
+allocate_expr_node()
+{
+	ExprNode * node = malloc(sizeof(ExprNode));
+	if (!node) {
 		fprintf(stderr, "Failed to allocate expression node\n");
 		exit(1);
 	}
-	variable_node->destructor = parsed_expr_node_destructor;
-	variable_node->node_type = EXPRNODE_Variable;
-	variable_node->as_Variable.name = parser->parsed_identifier.ptr;
-	parser->parsed_identifier = (CharSlice) { NULL, 0 };
-	parser->parsed_node = variable_node;
-	parser->after_ident = false;
+	node->destructor = parsed_expr_node_destructor;
+	return node;
+}
+
+static void
+parser_before_expression_end(Parser * parser)
+{
+	if (!parser->previous_token) {
+		return;
+	}
+	if (parser->previous_token->token_type != TOKENTYPE_Identifier) {
+		fprintf(stderr, "Expression end after token of type #%d", parser->previous_token->token_type);
+	}
+	ExprNode * node = allocate_expr_node();
+	node->node_type = EXPRNODE_Variable;
+	char *name = strndup(parser->previous_token->as_Identifier.name.ptr, parser->previous_token->as_Identifier.name.length);
+	node->as_Variable.name = name;
+	parser_consume_token_at(&parser->previous_token);
+	parser->parsed_node = node;
+	parser->previous_token = NULL;
 	parser->expression_end = true;
 }
 
-bool
+static bool
+parser_ensure_token(Parser * parser)
+{
+	if (parser->token) {
+		return true;
+	}
+	if (!lexer_has_token(parser->lexer)) {
+		return false;
+	}
+	parser->token = lexer_take_token(parser->lexer);
+	return true;
+}
+
+void
 parser_feed(Parser * parser, char * ptr, size_t length)
 {
-	CharSlice slc = parser->untokenized;
-	bool arguments_used = false;
-	while (!arguments_used) {
-		if (!slc.ptr || !slc.length) {
-			arguments_used = true;
-			slc.ptr = ptr;
-			slc.length = length;
-		}
-		while (parser->mode != PSMD_NORMAL || (slc.ptr && slc.length)) {
-			if (parser->next_char_class == CHCLS_UNKNOWN && slc.ptr && slc.length) {
-				parser->next_char = chslc_shift(&slc);
-				parser->next_char_class = ch_classify(parser->next_char);
-			}
-			switch (parser->mode) {
-			case PSMD_NORMAL:
-				switch (parser->next_char_class) {
-				case CHCLS_UNKNOWN:
-				case CHCLS_INVAL:
-					fprintf(stderr, "Unexpected byte: \\x%02x\n", parser->next_char);
-					exit(1);
-				case CHCLS_WS:
-					break;
-				case CHCLS_ALPH:
-				case CHCLS_NUM:
-					if (parser->expression_end) {
-						fprintf(stderr, "Expecting a separator, got '%c'\n", parser->next_char);
-						exit(1);
-					}
-	retry_token_end:;
-					ssize_t token_end = find_word_end(slc, arguments_used && parser->code_end);
-					if (token_end < 0) {
-						if (!arguments_used) {
-							// Currently, slc points to the internal buffer
-							// Should we still check that arguments are non-null?
-							memcpy(extend_untokenized_buffer(parser, slc.length, length), ptr, length);
-							arguments_used = true;
-							slc = parser->untokenized;
-							goto retry_token_end;
+	lexer_feed(parser->lexer, ptr, length);
+	while (parser_ensure_token(parser) || parser->mode != PSMD_NORMAL) {
+		switch (parser->mode) {
+		case PSMD_NORMAL:
+			switch (parser->token->token_type) {
+			case TOKENTYPE_LParen:
+				if (parser->previous_token) {
+					switch (parser->previous_token->token_type) {
+					case TOKENTYPE_Keyword: {
+							ExprNode * node = allocate_expr_node();
+							switch (parser->previous_token->as_Keyword.keyword_type) {
+							case KWTT_WHILE:
+								node->node_type = EXPRNODE_LoopWhile;
+								break;
+							case KWTT_IF:
+								node->node_type = EXPRNODE_CondIf;
+								break;
+							}
+							parser->parsed_node = node;
+							parser_consume_token_at(&parser->previous_token);
+							parser->mode = PSMD_WAIT_POP;
+							parser->call_iteration = 0;
+							parser_push_state(parser);
 						}
-						goto save_untokenized;
-					}
-					char * full_token = malloc(1 + token_end + 1);  // ALLOCATE full_token
-					if (!full_token) {
-						fprintf(stderr, "Failed to allocate token copy\n");
-						exit(1);
-					}
-					full_token[0] = parser->next_char;
-					memcpy(full_token + 1, slc.ptr, token_end);
-					full_token[1 + token_end] = '\0';
-					if (parser->next_char_class == CHCLS_NUM) {
-						WidthInteger literal_value = parse_number(full_token, 1 + token_end);
-						ExprNode * literal_node = malloc(sizeof(ExprNode));
-						if (!literal_node) {
-							fprintf(stderr, "Failed to allocate expression node\n");
-							exit(1);
-						}
-						literal_node->destructor = parsed_expr_node_destructor;
-						literal_node->node_type = EXPRNODE_Literal;
-						literal_node->as_Literal.value = literal_value;
-						parser->parsed_node = literal_node;
-						parser->expression_end = true;
-						free(full_token);  // FREE full_token
-					} else {
-						parser->parsed_identifier.ptr = full_token;  // MOVE full_token
-						parser->parsed_identifier.length = 1 + token_end;
-						parser->after_ident = true;
-					}
-					slc.length -= token_end;
-					slc.ptr += token_end;
-					break;
-				case CHCLS_PUNCT:
-					if (parser->next_char == parser->stack_terminator) {
-						parser_before_expression_end(parser);
-						parser_pop_state(parser);
-						// don't consume character
-						continue;
-					}
-					switch (parser->next_char) {
-					case ')':
-						// We don't know to which stack frame it belongs
-						parser_before_expression_end(parser);
-						parser_pop_state(parser);
-						// don't consume character
-						continue;
-					case ',':
-						parser_before_expression_end(parser);
-						if (parser->pop_on_comma) {
-							parser_pop_state(parser);
-							parser->after_comma = true;
-							// Consume
-							break;
-						} else {
-							if (parser->stack_terminator != ';') {
-								// TODO can we create a more elegant way of deciding whether we can pop?
-								fprintf(stderr, "Unexpected comma, expecting '%c'\n", parser->stack_terminator);
+						break;
+					case TOKENTYPE_Identifier: {
+							ExprNode * node = allocate_expr_node();
+							node->node_type = EXPRNODE_FunctionApplication;
+							if (!(node->as_FunctionApplication.func = find_function(parser->previous_token->as_Identifier.name.ptr))) {
+								fprintf(stderr, "Unknown function %.*s\n", (int)parser->previous_token->as_Identifier.name.length, parser->previous_token->as_Identifier.name.ptr);
 								exit(1);
 							}
-							parser_pop_state(parser);
-							// don't consume character
-							continue;
-						}
-					case '=':
-						if (!parser->after_ident) {
-							fprintf(stderr, "Assignment without left-hand-size\n");
-							exit(1);
-						}
-						ExprNode * assignment_node = malloc(sizeof(ExprNode));
-						if (!assignment_node) {
-							fprintf(stderr, "Failed to allocate expression node\n");
-							exit(1);
-						}
-						assignment_node->destructor = parsed_expr_node_destructor;
-						assignment_node->node_type = EXPRNODE_Assign;
-						assignment_node->as_Assign.name = parser->parsed_identifier.ptr;
-						parser->parsed_node = assignment_node;
-						parser->parsed_identifier = (CharSlice) { NULL, 0 };
-						parser->mode = PSMD_WAIT_POP;
-						parser_push_state(parser);
-						parser->pop_before_semicolon = true;
-						break;
-					case ':':  // TODO use ":=", not ":"
-						if (!parser->after_ident) {
-							fprintf(stderr, "Assignment without left-hand-size\n");
-							exit(1);
-						}
-						ExprNode * reassignment_node = malloc(sizeof(ExprNode));
-						if (!reassignment_node) {
-							fprintf(stderr, "Failed to allocate expression node\n");
-							exit(1);
-						}
-						reassignment_node->destructor = parsed_expr_node_destructor;
-						reassignment_node->node_type = EXPRNODE_Reassign;
-						reassignment_node->as_Reassign.name = parser->parsed_identifier.ptr;
-						parser->parsed_node = reassignment_node;
-						parser->parsed_identifier = (CharSlice) { NULL, 0 };
-						parser->mode = PSMD_WAIT_POP;
-						parser_push_state(parser);
-						parser->pop_before_semicolon = true;
-						break;
-					case ';':
-						parser_before_expression_end(parser);
-						if (parser->pop_before_semicolon) {
-							parser_pop_state(parser);
-							// Do not consume
-							continue;
-						}
-						ExprNode * statement_list_node = malloc(sizeof(ExprNode));
-						if (!statement_list_node) {
-							fprintf(stderr, "Failed to allocate expression node\n");
-							exit(1);
-						}
-						statement_list_node->destructor = parsed_expr_node_destructor;
-						statement_list_node->node_type = EXPRNODE_StatementList;
-						statement_list_node->as_StatementList.length = 0;
-						statement_list_node->as_StatementList.args = NULL;
-						if (parser->parsed_node) {
-							statement_list_node->as_StatementList.length = 1;
-							statement_list_node->as_StatementList.args = parser->parsed_node;
-						}
-						parser->parsed_node = statement_list_node;
-						parser->mode = PSMD_WAIT_POP;
-						parser_push_state(parser);
-						parser->stack_terminator = ';';
-						break;
-					case '(':
-						if (parser->after_ident) {
-							parser->after_ident = false;
-							if (!strcmp(parser->parsed_identifier.ptr, "while")) {
-								ExprNode * loop_while_node = malloc(sizeof(ExprNode));
-								if (!loop_while_node) {
-									fprintf(stderr, "Failed to allocate expression node\n");
-									exit(1);
-								}
-								loop_while_node->destructor = parsed_expr_node_destructor;
-								loop_while_node->node_type = EXPRNODE_LoopWhile;
-								parser->parsed_node = loop_while_node;
-								free(parser->parsed_identifier.ptr);
-								parser->parsed_identifier = (CharSlice) { NULL, 0 };
-								parser->mode = PSMD_WAIT_POP;
-								parser_push_state(parser);
-								parser->stack_terminator = ')';
-							} else if (!strcmp(parser->parsed_identifier.ptr, "if")) {
-								ExprNode * cond_if_node = malloc(sizeof(ExprNode));
-								if (!cond_if_node) {
-									fprintf(stderr, "Failed to allocate expression node\n");
-									exit(1);
-								}
-								cond_if_node->destructor = parsed_expr_node_destructor;
-								cond_if_node->node_type = EXPRNODE_CondIf;
-								parser->parsed_node = cond_if_node;
-								free(parser->parsed_identifier.ptr);
-								parser->parsed_identifier = (CharSlice) { NULL, 0 };
-								parser->mode = PSMD_WAIT_POP;
-								parser_push_state(parser);
-								parser->stack_terminator = ')';
-							} else {
-								// Function
-								ExprNode * function_application_node = malloc(sizeof(ExprNode));
-								if (!function_application_node) {
-									fprintf(stderr, "Failed to allocate expression node\n");
-									exit(1);
-								}
-								function_application_node->destructor = parsed_expr_node_destructor;
-								function_application_node->node_type = EXPRNODE_FunctionApplication;
-								if (!(function_application_node->as_FunctionApplication.func = find_function(parser->parsed_identifier.ptr))) {
-									fprintf(stderr, "Unknown function %.*s\n", (int)parser->parsed_identifier.length, parser->parsed_identifier.ptr);
-									exit(1);
-								}
-								function_application_node->as_FunctionApplication.arg_count = function_application_node->as_FunctionApplication.func->args_def.length;
-								if (!(function_application_node->as_FunctionApplication.args = calloc(function_application_node->as_FunctionApplication.arg_count, sizeof(ExprNode)))) {
-									fprintf(stderr, "Failed to allocate function arguments expressions\n");
-									exit(1);
-								}
-								parser->parsed_node = function_application_node;
-								free(parser->parsed_identifier.ptr);
-								parser->parsed_identifier = (CharSlice) { NULL, 0 };
-								parser->mode = PSMD_WAIT_POP;
-								parser_push_state(parser);
-								parser->pop_on_comma = true;
-								parser->stack_terminator = ')';
+							node->as_FunctionApplication.arg_count = node->as_FunctionApplication.func->args_def.length;
+							if (!(node->as_FunctionApplication.args = calloc(node->as_FunctionApplication.arg_count, sizeof(ExprNode)))) {
+								fprintf(stderr, "Failed to allocate function arguments expressions\n");
+								exit(1);
 							}
-						} else {
-							parser->mode = PSMD_GROUP;
+							parser->parsed_node = node;
+							parser_consume_token_at(&parser->previous_token);
+							parser->mode = PSMD_WAIT_POP;
 							parser_push_state(parser);
-							parser->stack_terminator = ')';
+							parser->pop_on_comma = true;
 						}
 						break;
 					default:
-						fprintf(stderr, "Unexpected punctuation: '%c'\n", parser->next_char);
+						fprintf(stderr, "Unexpected previous_token %d\n", parser->previous_token->token_type);
 						exit(1);
 					}
+				} else {
+					parser->mode = PSMD_GROUP;
+					parser_push_state(parser);
 				}
-				parser->next_char = 0;
-				parser->next_char_class = CHCLS_UNKNOWN;
+				parser_consume_token(parser);
 				break;
-			case PSMD_WAIT_POP:
-				switch (parser->parsed_node->node_type) {
-				case EXPRNODE_FunctionApplication:
-					if (parser->popped_parsed_node) {
-						parser->parsed_node->as_FunctionApplication.args[parser->call_iteration] = *parser->popped_parsed_node;  // MOVE contents
-						free(parser->popped_parsed_node);  // FREE extra pointer
-						parser->popped_parsed_node = NULL;
-					} else {
-						--parser->call_iteration;
-					}
-					if (parser->after_comma && parser->call_iteration >= (int64_t) parser->parsed_node->as_FunctionApplication.arg_count) {
-						fprintf(stderr, "Too many arguments for function %s\n", parser->parsed_node->as_FunctionApplication.func->name);
+			case TOKENTYPE_RParen: {
+					parser_before_expression_end(parser);
+					parser_pop_state(parser);
+				}
+				// don't consume character
+				break;
+			case TOKENTYPE_Assign: {
+					if (!parser->previous_token) {
+						fprintf(stderr, "Assignment without left-hand-size\n");
 						exit(1);
 					}
-					if (parser->after_comma) {
-						parser->after_comma = false;
-						++parser->call_iteration;
-						parser_push_state(parser);
-						parser->pop_on_comma = true;
-						parser->stack_terminator = ')';
+					ExprNode * node = allocate_expr_node();
+					char *name = strndup(parser->previous_token->as_Identifier.name.ptr, parser->previous_token->as_Identifier.name.length);
+					if (parser->token->as_Assign.is_reassign) {
+						node->node_type = EXPRNODE_Reassign;
+						node->as_Reassign.name = name;
 					} else {
-						// Consume character
-						parser->next_char = 0;
-						parser->next_char_class = CHCLS_UNKNOWN;
-						if (parser->call_iteration + 1 != (int64_t) parser->parsed_node->as_FunctionApplication.arg_count) {
-							fprintf(stderr, "Not enough arguments for function %s, expected %ld, given %ld\n", parser->parsed_node->as_FunctionApplication.func->name, parser->parsed_node->as_FunctionApplication.arg_count, parser->call_iteration);
-							exit(1);
-						}
-						parser->call_iteration = 0;
-						parser->expression_end = true;
-						parser->mode = PSMD_NORMAL;
+						node->node_type = EXPRNODE_Assign;
+						node->as_Reassign.name = name;
 					}
-					parser->after_comma = false;
-					break;
-				case EXPRNODE_Assign:
-					parser->parsed_node->as_Assign.rhs = parser->popped_parsed_node;  // MOVE
-					parser->popped_parsed_node = NULL;
-					parser->expression_end = true;
-					parser->mode = PSMD_NORMAL;
-					break;
-				case EXPRNODE_Reassign:
-					parser->parsed_node->as_Reassign.rhs = parser->popped_parsed_node;  // MOVE
-					parser->popped_parsed_node = NULL;
-					parser->expression_end = true;
-					parser->mode = PSMD_NORMAL;
-					break;
-				case EXPRNODE_StatementList:
-					if (parser->popped_parsed_node) {
-						++(parser->parsed_node->as_StatementList.length);
-						if (!(parser->parsed_node->as_StatementList.args = reallocarray(parser->parsed_node->as_StatementList.args, parser->parsed_node->as_StatementList.length, sizeof(ExprNode)))) {
-							fprintf(stderr, "Failed to reallocate statement list");
-							exit(1);
-						}
-						parser->parsed_node->as_StatementList.args[parser->parsed_node->as_StatementList.length - 1] = *parser->popped_parsed_node;  // MOVE contents
-						free(parser->popped_parsed_node);  // FREE extra pointer
-						parser->popped_parsed_node = NULL;
-					}
-					if (parser->next_char == ';') {
-						// Consume character
-						parser->next_char = 0;
-						parser->next_char_class = CHCLS_UNKNOWN;
-						// Switch again
-						parser_push_state(parser);
-						parser->stack_terminator = ';';
+					parser_consume_token_at(&parser->previous_token);
+					parser->parsed_node = node;
+					parser->mode = PSMD_WAIT_POP;
+					parser_push_state(parser);
+					parser->pop_before_semicolon = true;
+				}
+				parser_consume_token(parser);
+				break;
+			case TOKENTYPE_Comma: {
+					parser_before_expression_end(parser);
+					if (parser->pop_on_comma) {
+						parser_pop_state(parser);
+						parser->after_comma = true;
+						parser_consume_token(parser);
 					} else {
-						parser->mode = PSMD_NORMAL;
+						parser_pop_state(parser);
 					}
-					break;
-				case EXPRNODE_LoopWhile:
-					if (!parser->call_iteration) {
-						// Consume character
-						parser->next_char = 0;
-						parser->next_char_class = CHCLS_UNKNOWN;
-						parser->parsed_node->as_LoopWhile.condition = parser->popped_parsed_node;  // MOVE
-						parser->popped_parsed_node = NULL;
-						parser->call_iteration = 1;
-						parser_push_state(parser);
-						parser->mode = PSMD_NORMAL;
-					} else {
-						parser->parsed_node->as_LoopWhile.body = parser->popped_parsed_node;  // MOVE
-						parser->popped_parsed_node = NULL;
-						parser->expression_end = true;
-						parser->mode = PSMD_NORMAL;
-					}
-					break;
-				case EXPRNODE_CondIf:
-					if (!parser->call_iteration) {
-						// Consume character
-						parser->next_char = 0;
-						parser->next_char_class = CHCLS_UNKNOWN;
-						parser->parsed_node->as_CondIf.condition = parser->popped_parsed_node;  // MOVE
-						parser->popped_parsed_node = NULL;
-						parser->call_iteration = 1;
-						parser_push_state(parser);
-						parser->mode = PSMD_NORMAL;
-					} else {
-						parser->parsed_node->as_CondIf.body = parser->popped_parsed_node;  // MOVE
-						parser->popped_parsed_node = NULL;
-						parser->expression_end = true;
-						parser->mode = PSMD_NORMAL;
-					}
-					break;
-				default:
-					fprintf(stderr, "Unexpected PSMD_WAIT_POP\n");
-					exit(1);
 				}
 				break;
-			case PSMD_GROUP:
-				if (parser->next_char != ')') {
-					fprintf(stderr, "Expected ')', got '\\x%02x'\n", parser->next_char);
-					exit(1);
+			case TOKENTYPE_Identifier: {
+					if (parser->expression_end || parser->previous_token) {
+						fprintf(stderr, "Expecting a separator, got \"%.*s\"\n", (int) parser->token->as_Identifier.name.length, parser->token->as_Identifier.name.ptr);
+						exit(1);
+					}
+					parser->previous_token = parser->token;
+					parser->token = NULL;
 				}
-				parser->next_char = 0;
-				parser->next_char_class = CHCLS_UNKNOWN;
-				parser->mode = PSMD_NORMAL;
-				parser->parsed_node = parser->popped_parsed_node;
-				parser->popped_parsed_node = NULL;
+				break;
+			case TOKENTYPE_Keyword: {
+					if (parser->expression_end || parser->previous_token) {
+						fprintf(stderr, "Expecting a separator, got keyword #%d\n", parser->token->as_Keyword.keyword_type);
+						exit(1);
+					}
+					parser->previous_token = parser->token;
+					parser->token = NULL;
+				}
+				break;
+			case TOKENTYPE_Number: {
+					ExprNode * node = allocate_expr_node();
+					node->node_type = EXPRNODE_Literal;
+					node->as_Literal.value = parser->token->as_Number.value;
+					parser->parsed_node = node;
+				}
+				parser_consume_token(parser);
+				break;
+			case TOKENTYPE_Semicolon: {
+					parser_before_expression_end(parser);
+					if (parser->pop_before_semicolon) {
+						parser_pop_state(parser);
+						break;
+					}
+					ExprNode * node = allocate_expr_node();
+					node->node_type = EXPRNODE_StatementList;
+					node->as_StatementList.length = 0;
+					node->as_StatementList.args = NULL;
+					if (parser->parsed_node) {
+						node->as_StatementList.length = 1;
+						node->as_StatementList.args = parser->parsed_node;
+					}
+					parser->parsed_node = node;
+					parser->mode = PSMD_WAIT_POP;
+					parser_push_state(parser);
+					parser->pop_before_semicolon = true;
+					parser_consume_token(parser);
+				}
 				break;
 			}
-		}
-	}
-save_untokenized:
-	if (slc.ptr && slc.length) {
-		if (slc.ptr + slc.length == parser->untokenized.ptr + parser->untokenized.length) {
-			parser->untokenized = slc;
-		} else {
-			if (!(parser->untokenized.ptr = realloc(parser->untokenized.ptr, slc.length))) {
-				fprintf(stderr, "Failled to resize internal parser buffer\n");
+			break;
+		case PSMD_WAIT_POP:
+			switch (parser->parsed_node->node_type) {
+			case EXPRNODE_FunctionApplication:
+				if (parser->popped_parsed_node) {
+					parser->parsed_node->as_FunctionApplication.args[parser->call_iteration] = *parser->popped_parsed_node;  // MOVE contents
+					free(parser->popped_parsed_node);  // FREE extra pointer
+					parser->popped_parsed_node = NULL;
+				} else {
+					--parser->call_iteration;
+				}
+				if (parser->after_comma && parser->call_iteration >= (int64_t) parser->parsed_node->as_FunctionApplication.arg_count) {
+					fprintf(stderr, "Too many arguments for function %s\n", parser->parsed_node->as_FunctionApplication.func->name);
+					exit(1);
+				}
+				++parser->call_iteration;
+				if (parser->after_comma) {
+					parser->after_comma = false;
+					parser_push_state(parser);
+					parser->pop_on_comma = true;
+					parser->stack_terminator = ')';
+				} else {
+					parser_consume_token(parser);
+					if (parser->call_iteration != (int64_t) parser->parsed_node->as_FunctionApplication.arg_count) {
+						fprintf(stderr, "Not enough arguments for function %s, expected %ld, given %ld\n", parser->parsed_node->as_FunctionApplication.func->name, parser->parsed_node->as_FunctionApplication.arg_count, parser->call_iteration);
+						exit(1);
+					}
+					parser->call_iteration = 0;
+					parser->expression_end = true;
+					parser->mode = PSMD_NORMAL;
+				}
+				parser->after_comma = false;
+				break;
+			case EXPRNODE_Assign:
+				parser->parsed_node->as_Assign.rhs = parser->popped_parsed_node;  // MOVE
+				parser->popped_parsed_node = NULL;
+				parser->expression_end = true;
+				parser->mode = PSMD_NORMAL;
+				break;
+			case EXPRNODE_Reassign:
+				parser->parsed_node->as_Reassign.rhs = parser->popped_parsed_node;  // MOVE
+				parser->popped_parsed_node = NULL;
+				parser->expression_end = true;
+				parser->mode = PSMD_NORMAL;
+				break;
+			case EXPRNODE_StatementList:
+				if (!parser->token && !parser->code_end) {
+					// We don't yet know whether it's EOF or we will have semicolon in the next code chunk
+					return;
+				}
+				if (parser->popped_parsed_node) {
+					++parser->parsed_node->as_StatementList.length;
+					if (!(parser->parsed_node->as_StatementList.args = reallocarray(parser->parsed_node->as_StatementList.args, parser->parsed_node->as_StatementList.length, sizeof(ExprNode)))) {
+						fprintf(stderr, "Failed to reallocate statement list\n");
+						exit(1);
+					}
+					parser->parsed_node->as_StatementList.args[parser->parsed_node->as_StatementList.length - 1] = *parser->popped_parsed_node;  // MOVE contents
+					free(parser->popped_parsed_node);  // FREE extra pointer
+					parser->popped_parsed_node = NULL;
+				}
+				if (parser->token && parser->token->token_type == TOKENTYPE_Semicolon) {
+					parser_consume_token(parser);
+					// Switch again
+					parser_push_state(parser);
+					parser->pop_before_semicolon = true;
+				} else {
+					parser->mode = PSMD_NORMAL;
+				}
+				break;
+			case EXPRNODE_LoopWhile:
+				if (!parser->call_iteration) {
+					parser_consume_token(parser);
+					parser->parsed_node->as_LoopWhile.condition = parser->popped_parsed_node;  // MOVE
+					parser->popped_parsed_node = NULL;
+					parser->call_iteration = 1;
+					parser_push_state(parser);
+					parser->pop_before_semicolon = true;
+					parser->mode = PSMD_NORMAL;
+				} else {
+					parser->parsed_node->as_LoopWhile.body = parser->popped_parsed_node;  // MOVE
+					parser->popped_parsed_node = NULL;
+					parser->expression_end = true;
+					parser->mode = PSMD_NORMAL;
+				}
+				break;
+			case EXPRNODE_CondIf:
+				if (!parser->call_iteration) {
+					parser_consume_token(parser);
+					parser->parsed_node->as_CondIf.condition = parser->popped_parsed_node;  // MOVE
+					parser->popped_parsed_node = NULL;
+					parser->call_iteration = 1;
+					parser_push_state(parser);
+					parser->mode = PSMD_NORMAL;
+				} else {
+					parser->parsed_node->as_CondIf.body = parser->popped_parsed_node;  // MOVE
+					parser->popped_parsed_node = NULL;
+					parser->expression_end = true;
+					parser->mode = PSMD_NORMAL;
+				}
+				break;
+			default:
+				fprintf(stderr, "Unexpected PSMD_WAIT_POP\n");
 				exit(1);
 			}
-			memcpy(parser->untokenized.ptr, slc.ptr, slc.length);
-			parser->untokenized.length = slc.length;
+			break;
+		case PSMD_GROUP:
+			if (parser->token->token_type != TOKENTYPE_RParen) {
+				fprintf(stderr, "Expected ')', got type %d\n", parser->token->token_type);
+				exit(1);
+			}
+			parser_consume_token(parser);
+			parser->mode = PSMD_NORMAL;
+			parser->parsed_node = parser->popped_parsed_node;
+			parser->popped_parsed_node = NULL;
+			break;
 		}
 	}
-	return true;
 }
 
 const ExprNode *
 parser_end(Parser * parser)
 {
 	parser->code_end = true;
+	lexer_end(parser->lexer);
 	parser_feed(parser, NULL, 0);
 	while (parser->stack_parent) {
 		parser_before_expression_end(parser);
