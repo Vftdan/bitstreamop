@@ -220,4 +220,33 @@ BITSTREAMOP_FUNCTION(eq, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_AR
 	};
 ))
 
+#define HAS_BITREVERSE64 0
+#if defined __has_builtin
+#if __has_builtin(__builtin_bitreverse64)
+#define HAS_BITREVERSE64 1
+#endif
+#endif
+#if defined __builtin_bitreverse64
+#define HAS_BITREVERSE64 1
+#endif
+
+BITSTREAMOP_FUNCTION(bit_reverse, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(msb)), (
+	const uint64_t lookup = 0xF7B3D591E6A2C480;
+	uint64_t msb = args->msb.value;
+	BitUSize width = args->msb.width;
+#if HAS_BITREVERSE64
+	uint64_t lsb = __builtin_bitreverse64(msb);
+#else
+	uint64_t lsb = 0;
+	for (int i = 0; i < 16; ++i) {
+		lsb = (lsb << 4) | (0xF & (lookup >> ((msb & 0xF) << 2)));
+		msb >>= 4;
+	}
+#endif
+	return (WidthInteger) {
+		.value = lsb >> (64 - width),
+		.width = width,
+	};
+))
+
 #endif
