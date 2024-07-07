@@ -5,11 +5,6 @@
 #define UNPACK(...) __VA_ARGS__
 #define PUSH_DOWN_MEMBERS(struct_name, current_name, members) union { struct struct_name { UNPACK members } current_name; struct { UNPACK members }; };
 
-typedef struct {
-	char *ptr;
-	size_t length;
-} CharSlice;
-
 typedef enum {
 	CHCLS_UNKNOWN,
 	CHCLS_WS,
