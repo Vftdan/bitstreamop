@@ -86,7 +86,11 @@ BITSTREAMOP_EXPRNODE(Reassign, (
 	if (ptr) {
 		*ptr = value;
 	} else {
-		scope_assign_variable(&ctx->scope, self->name, value);
+		InterpScope * scope = &ctx->scope;
+		while (scope->call_parent) {
+			scope = scope->call_parent;
+		}
+		scope_assign_variable(scope, self->name, value);
 	}
 	*result = value;
 ), printer, (
