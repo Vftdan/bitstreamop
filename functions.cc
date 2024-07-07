@@ -115,6 +115,13 @@ BITSTREAMOP_FUNCTION(width, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(new_width) BITST
 	});
 ))
 
+BITSTREAMOP_FUNCTION(sig_width, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(new_width) BITSTREAMOP_ARG(value)), (
+	return fix_width((WidthInteger) {
+		.value = sigextend_value(args->value),
+		.width = args->new_width.value,
+	});
+))
+
 BITSTREAMOP_FUNCTION(add, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
 	return fix_width((WidthInteger) {
 		.value = args->lhs.value + args->rhs.value,
@@ -145,7 +152,7 @@ BITSTREAMOP_FUNCTION(div, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_A
 
 BITSTREAMOP_FUNCTION(sig_div, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
 	return fix_width((WidthInteger) {
-		.value = (int64_t) args->lhs.value / (int64_t) args->rhs.value,
+		.value = sigextend_value(args->lhs) / sigextend_value(args->rhs),
 		.width = args->lhs.width,
 	});
 ))
@@ -180,28 +187,28 @@ BITSTREAMOP_FUNCTION(ge, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_AR
 
 BITSTREAMOP_FUNCTION(sig_lt, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
 	return (WidthInteger) {
-		.value = (int64_t) args->lhs.value < (int64_t) args->rhs.value,
+		.value = sigextend_value(args->lhs) < sigextend_value(args->rhs),
 		.width = 1,
 	};
 ))
 
 BITSTREAMOP_FUNCTION(sig_gt, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
 	return (WidthInteger) {
-		.value = (int64_t) args->lhs.value > (int64_t) args->rhs.value,
+		.value = sigextend_value(args->lhs) > sigextend_value(args->rhs),
 		.width = 1,
 	};
 ))
 
 BITSTREAMOP_FUNCTION(sig_le, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
 	return (WidthInteger) {
-		.value = (int64_t) args->lhs.value <= (int64_t) args->rhs.value,
+		.value = sigextend_value(args->lhs) <= sigextend_value(args->rhs),
 		.width = 1,
 	};
 ))
 
 BITSTREAMOP_FUNCTION(sig_ge, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
 	return (WidthInteger) {
-		.value = (int64_t) args->lhs.value >= (int64_t) args->rhs.value,
+		.value = sigextend_value(args->lhs) >= sigextend_value(args->rhs),
 		.width = 1,
 	};
 ))

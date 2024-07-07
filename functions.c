@@ -12,6 +12,22 @@ die(char * msg)
 	exit(1);
 }
 
+inline static int64_t
+sigextend_value(WidthInteger width_int)
+{
+	uint64_t value = width_int.value;
+	if (width_int.width > 63) {
+		return value;
+	}
+	uint64_t mask = (1 << width_int.width) - 1;
+	uint64_t sign_bit_mask = width_int.width ? 0 : 1 << (width_int.width - 1);
+	if (value & sign_bit_mask) {
+		return value | ~mask;
+	} else {
+		return value;
+	}
+}
+
 static WidthInteger
 fix_width(WidthInteger value)
 {
