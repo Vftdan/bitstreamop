@@ -10,7 +10,11 @@
 enum keyword_token_type {
 	KWTT_WHILE,
 	KWTT_IF,
+	KWTT_FUNCTION,
+	KWTT_CALL,
 };
+
+extern char *keyword_type_names[4];
 
 struct token_data;
 
@@ -42,5 +46,7 @@ destruct_token_data(TokenData * self)
 }
 
 void print_token_data(TreePrinter * printer, const TokenData * token);
+
+extern char *token_type_names[];
 
 #endif /* end of include guard: TOKEN_TYPES_H_ */

@@ -25,7 +25,7 @@ BITSTREAMOP_TOKEN(Semicolon, (
 BITSTREAMOP_TOKEN(Keyword, (
 	TOKEN_PAYLOAD_FIELD(enum keyword_token_type, keyword_type)
 ), (
-	PRINT_FIELD("keyword_type = %d", self->keyword_type);
+	PRINT_FIELD("keyword_type = %s", keyword_type_names[self->keyword_type]);
 ))
 
 BITSTREAMOP_TOKEN(Identifier, (

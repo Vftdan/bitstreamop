@@ -37,6 +37,8 @@ destruct_expression(struct expression_node * self)
 		self->destructor(self);
 }
 
+extern char *expr_node_types[];
+
 #undef EXPRESSION_H__UNPACK
 
 #endif /* end of include guard: EXPRESSION_H_ */

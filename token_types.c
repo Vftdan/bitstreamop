@@ -34,3 +34,16 @@ print_token_data(TreePrinter * __printer, const TokenData * __token)
 		}
 	}
 }
+
+char *keyword_type_names[] = {
+	"while",
+	"if",
+	"function",
+	"call",
+};
+
+char *token_type_names[] = {
+#define BITSTREAMOP_TOKEN(name, elements, printimpl) #name,
+#include "token_types.cc"
+#undef BITSTREAMOP_TOKEN
+};

@@ -75,3 +75,9 @@ print_expression(TreePrinter * __printer, const ExprNode * __expr)
 		}
 	}
 }
+
+char *expr_node_types[] = {
+#define BITSTREAMOP_EXPRNODE(name, elements, self, ctx, result, evalimpl, printer_var, printimpl) #name,
+#include "expression.cc"
+#undef BITSTREAMOP_EXPRNODE
+};
