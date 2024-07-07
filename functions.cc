@@ -143,11 +143,74 @@ BITSTREAMOP_FUNCTION(div, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_A
 	});
 ))
 
-BITSTREAMOP_FUNCTION(sigdiv, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
+BITSTREAMOP_FUNCTION(sig_div, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
 	return fix_width((WidthInteger) {
 		.value = (int64_t) args->lhs.value / (int64_t) args->rhs.value,
 		.width = args->lhs.width,
 	});
+))
+
+BITSTREAMOP_FUNCTION(lt, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
+	return (WidthInteger) {
+		.value = args->lhs.value < args->rhs.value,
+		.width = 1,
+	};
+))
+
+BITSTREAMOP_FUNCTION(gt, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
+	return (WidthInteger) {
+		.value = args->lhs.value > args->rhs.value,
+		.width = 1,
+	};
+))
+
+BITSTREAMOP_FUNCTION(le, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
+	return (WidthInteger) {
+		.value = args->lhs.value <= args->rhs.value,
+		.width = 1,
+	};
+))
+
+BITSTREAMOP_FUNCTION(ge, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
+	return (WidthInteger) {
+		.value = args->lhs.value >= args->rhs.value,
+		.width = 1,
+	};
+))
+
+BITSTREAMOP_FUNCTION(sig_lt, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
+	return (WidthInteger) {
+		.value = (int64_t) args->lhs.value < (int64_t) args->rhs.value,
+		.width = 1,
+	};
+))
+
+BITSTREAMOP_FUNCTION(sig_gt, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
+	return (WidthInteger) {
+		.value = (int64_t) args->lhs.value > (int64_t) args->rhs.value,
+		.width = 1,
+	};
+))
+
+BITSTREAMOP_FUNCTION(sig_le, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
+	return (WidthInteger) {
+		.value = (int64_t) args->lhs.value <= (int64_t) args->rhs.value,
+		.width = 1,
+	};
+))
+
+BITSTREAMOP_FUNCTION(sig_ge, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
+	return (WidthInteger) {
+		.value = (int64_t) args->lhs.value >= (int64_t) args->rhs.value,
+		.width = 1,
+	};
+))
+
+BITSTREAMOP_FUNCTION(eq, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
+	return (WidthInteger) {
+		.value = args->lhs.value == args->rhs.value,
+		.width = 1,
+	};
 ))
 
 #endif
