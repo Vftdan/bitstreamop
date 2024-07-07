@@ -25,6 +25,7 @@ run_program(const ExprNode * program)
 	bit_io_flush(&io_out);
 	free_bit_io(io_in);
 	free_bit_io(io_out);
+	scope_clear(&ctx.scope);
 }
 
 void
