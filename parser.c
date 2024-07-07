@@ -242,6 +242,10 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 		case PSMD_NORMAL:
 			switch (parser->token->token_type) {
 			case TOKENTYPE_LParen:
+				if (parser->expression_end || parser->parsed_node) {
+					fprintf(stderr, "Expected a separator, got '('\n");
+					exit(1);
+				}
 				if (parser->previous_token) {
 					switch (parser->previous_token->token_type) {
 					case TOKENTYPE_Keyword: {
@@ -301,6 +305,10 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 				// don't consume character
 				break;
 			case TOKENTYPE_Assign: {
+					if (parser->expression_end || parser->parsed_node) {
+						fprintf(stderr, "Expected a separator, got assignment\n");
+						exit(1);
+					}
 					if (!parser->previous_token) {
 						fprintf(stderr, "Assignment without left-hand-size\n");
 						exit(1);
@@ -334,7 +342,7 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 				}
 				break;
 			case TOKENTYPE_Identifier: {
-					if (parser->expression_end || parser->previous_token) {
+					if (parser->expression_end || parser->previous_token || parser->parsed_node) {
 						fprintf(stderr, "Expecting a separator, got \"%.*s\"\n", (int) parser->token->as_Identifier.name.length, parser->token->as_Identifier.name.ptr);
 						exit(1);
 					}
@@ -343,13 +351,13 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 				}
 				break;
 			case TOKENTYPE_Keyword: {
+					if (parser->expression_end || parser->previous_token || parser->parsed_node) {
+						fprintf(stderr, "Expecting a separator, got keyword \"%s\"\n", keyword_type_names[parser->token->as_Keyword.keyword_type]);
+						exit(1);
+					}
 					switch (parser->token->as_Keyword.keyword_type) {
 					case KWTT_WHILE:
 					case KWTT_IF:
-						if (parser->expression_end || parser->previous_token) {
-							fprintf(stderr, "Expecting a separator, got keyword #%d\n", parser->token->as_Keyword.keyword_type);
-							exit(1);
-						}
 						parser->previous_token = parser->token;
 						parser->token = NULL;
 						break;
@@ -381,6 +389,10 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 				}
 				break;
 			case TOKENTYPE_Number: {
+					if (parser->expression_end || parser->parsed_node) {
+						fprintf(stderr, "Expecting a separator, got number %lu\n", parser->token->as_Number.value.value);
+						exit(1);
+					}
 					ExprNode * node = allocate_expr_node();
 					node->node_type = EXPRNODE_Literal;
 					node->as_Literal.value = parser->token->as_Number.value;
@@ -394,6 +406,7 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 						parser_pop_state(parser);
 						break;
 					}
+					parser->expression_end = false;
 					ExprNode * node = allocate_expr_node();
 					node->node_type = EXPRNODE_StatementList;
 					node->as_StatementList.length = 0;
