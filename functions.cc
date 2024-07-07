@@ -124,7 +124,7 @@ BITSTREAMOP_FUNCTION(add, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_A
 
 BITSTREAMOP_FUNCTION(sub, BITSTREAMOP_ARGLIST(BITSTREAMOP_ARG(lhs) BITSTREAMOP_ARG(rhs)), (
 	return fix_width((WidthInteger) {
-		.value = args->lhs.value + args->rhs.value,
+		.value = args->lhs.value - args->rhs.value,
 		.width = MAX(args->lhs.width, args->rhs.width),
 	});
 ))
