@@ -7,7 +7,11 @@
 #include "bitio.h"
 #include "functions.h"
 #include "expression.h"
+#ifdef LEXER_ONLY
+#include "lexer.h"
+#else
 #include "parser.h"
+#endif
 
 void
 run_program(const ExprNode * program)
@@ -56,6 +60,20 @@ main(int argc, char ** argv)
 		code = argv[2];
 	}
 
+#ifdef LEXER_ONLY
+	Lexer * lexer = lexer_new();
+	lexer_feed(lexer, code, strlen(code));
+	lexer_end(lexer);
+	FileTreePrinter printer;
+	init_file_tree_printer(&printer, stdout);
+	TokenData * token;
+	while ((token = lexer_take_token(lexer))) {
+		print_token_data(&printer.as_tree_printer, token);
+		destruct_token_data(token);
+		free(token);
+	}
+	lexer_delete(lexer);
+#else
 	Parser * parser = parser_new();
 	parser_feed(parser, code, strlen(code));
 	const ExprNode * parsed_program = parser_end(parser);
@@ -68,6 +86,7 @@ main(int argc, char ** argv)
 		break;
 	}
 	parser_delete(parser);
+#endif
 
 	return 0;
 }
