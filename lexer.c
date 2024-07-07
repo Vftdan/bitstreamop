@@ -367,6 +367,16 @@ lexer_poll_iteration(Lexer * lexer, ConstCharSlice * slc, bool source_end)
 				lexer->token->token_type = TOKENTYPE_Keyword;
 				lexer->token->as_Keyword.keyword_type = KWTT_IF;
 				free(full_token);  // FREE full_token
+			} else if (!strcmp(full_token, "function")) {
+				lexer->token = allocate_token_data();
+				lexer->token->token_type = TOKENTYPE_Keyword;
+				lexer->token->as_Keyword.keyword_type = KWTT_FUNCTION;
+				free(full_token);  // FREE full_token
+			} else if (!strcmp(full_token, "call")) {
+				lexer->token = allocate_token_data();
+				lexer->token->token_type = TOKENTYPE_Keyword;
+				lexer->token->as_Keyword.keyword_type = KWTT_CALL;
+				free(full_token);  // FREE full_token
 			} else {
 				lexer->token = allocate_token_data();
 				lexer->token->token_type = TOKENTYPE_Identifier;

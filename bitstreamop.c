@@ -23,6 +23,7 @@ run_program(const ExprNode * program)
 		.io_in = &io_in,
 		.io_out = &io_out,
 		.scope = {NULL, NULL},
+		.user_functions = NULL,
 	};
 
 	evaluate_expression(&ctx, program);
@@ -30,6 +31,7 @@ run_program(const ExprNode * program)
 	free_bit_io(io_in);
 	free_bit_io(io_out);
 	scope_clear(&ctx.scope);
+	userfunclist_clear(ctx.user_functions);
 }
 
 void

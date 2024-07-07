@@ -10,10 +10,26 @@ typedef struct {
 	BitUSize width;
 } WidthInteger;
 
+typedef struct {
+	char *name;
+} ArgumentsDefEntry;
+
+typedef struct {
+	uint64_t length;
+	ArgumentsDefEntry *entries;
+} ArgumentsDef;
+
 struct varlist_node {
 	struct varlist_node *next;
 	char *name;
 	WidthInteger value;
+};
+
+struct userfunclist_node {
+	struct userfunclist_node *next;
+	char *name;
+	struct expression_node *body;
+	ArgumentsDef args_def;
 };
 
 typedef struct interp_scope {
@@ -24,16 +40,8 @@ typedef struct interp_scope {
 typedef struct {
 	BitIO *io_in, *io_out;
 	InterpScope scope;
+	struct userfunclist_node *user_functions;
 } InterpContext;
-
-typedef struct {
-	char *name;
-} ArgumentsDefEntry;
-
-typedef struct {
-	uint64_t length;
-	ArgumentsDefEntry *entries;
-} ArgumentsDef;
 
 typedef struct {
 	char *name;
@@ -45,6 +53,49 @@ typedef struct {
 	uint64_t length;
 	FunctionTableEntry *entries;
 } FunctionTable;
+
+__attribute__((unused)) inline static struct userfunclist_node*
+userfunclist_find_function(struct userfunclist_node * funcnode, char * name)
+{
+	while (funcnode) {
+		if (!strcmp(name, funcnode->name)) {
+			return funcnode;
+		}
+		funcnode = funcnode->next;
+	}
+	return NULL;
+}
+
+__attribute__((unused)) inline static void
+userfunclist_add_function(struct userfunclist_node ** funcnodeptr, char * name, ArgumentsDef args_def, struct expression_node *body)
+{
+	if (!funcnodeptr)
+		return;
+	struct userfunclist_node *new_node = malloc(sizeof(struct userfunclist_node));
+	if (!new_node) {
+		fprintf(stderr, "Failed to allocate user function node\n");
+		exit(1);
+	}
+	*new_node = (struct userfunclist_node) {
+		.next = *funcnodeptr,
+		.name = strdup(name),
+		.body = body,
+		.args_def = args_def,
+	};
+	*funcnodeptr = new_node;
+}
+
+__attribute__((unused)) inline static void
+userfunclist_clear(struct userfunclist_node * funcnode)
+{
+	while (funcnode) {
+		struct userfunclist_node *next = funcnode->next;
+		free(funcnode->name);
+		// funcnode->body and funcnode->args_def.entries are owned by the UserFunctionDef node
+		free(funcnode);
+		funcnode = next;
+	}
+}
 
 __attribute__((unused)) inline static WidthInteger*
 scope_find_variable(InterpScope * scope, char * name)

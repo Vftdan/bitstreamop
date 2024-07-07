@@ -1,3 +1,4 @@
+#include "interp_types.h"
 #include "lexer.h"
 #include "parser.h"
 #include "functions.h"
@@ -10,6 +11,8 @@ typedef enum {
 	PSMD_NORMAL,
 	PSMD_WAIT_POP,
 	PSMD_GROUP,
+	PSMD_GET_IDENTIFIER,
+	PSMD_GET_ARGS,
 } ParserMode;
 
 struct parser {
@@ -25,7 +28,6 @@ struct parser {
 		bool after_comma;
 		bool expression_end;  // Expecting separator or closing parenthesis
 		int64_t call_iteration;
-		enum token_type stack_terminator;
 		TokenData * previous_token;
 	))
 	ExprNode * popped_parsed_node;
@@ -73,6 +75,27 @@ parsed_expr_node_destructor(ExprNode * node)
 		destruct_expression(node->as_CondIf.condition);
 		free(node->as_CondIf.body);
 		free(node->as_CondIf.condition);
+		break;
+	case EXPRNODE_UserFunctionDef:
+		if (node->as_UserFunctionDef.args.entries) {
+			for (uint64_t i = 0; i < node->as_UserFunctionDef.args.length; ++i) {
+				if (node->as_UserFunctionDef.args.entries[i].name) {
+					free(node->as_UserFunctionDef.args.entries[i].name);
+				}
+			}
+			free(node->as_UserFunctionDef.args.entries);
+			node->as_UserFunctionDef.args.entries = NULL;
+		}
+		destruct_expression(node->as_UserFunctionDef.body);
+		free(node->as_UserFunctionDef.body);
+		free(node->as_UserFunctionDef.name);
+		break;
+	case EXPRNODE_UserFunctionCall:
+		for (uint64_t i = 0; i < node->as_UserFunctionCall.arg_count; ++i) {
+			destruct_expression(&node->as_UserFunctionCall.args[i]);
+		}
+		free(node->as_UserFunctionCall.args);
+		free(node->as_UserFunctionCall.name);
 		break;
 	}
 }
@@ -168,6 +191,16 @@ allocate_expr_node()
 	return node;
 }
 
+static ExprNode *
+make_noop_expr()
+{
+	ExprNode * statement_list_node = allocate_expr_node();
+	statement_list_node->node_type = EXPRNODE_StatementList;
+	statement_list_node->as_StatementList.length = 0;
+	statement_list_node->as_StatementList.args = NULL;
+	return statement_list_node;
+}
+
 static void
 parser_before_expression_end(Parser * parser)
 {
@@ -220,12 +253,16 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 							case KWTT_IF:
 								node->node_type = EXPRNODE_CondIf;
 								break;
+							default:
+								fprintf(stderr, "Unexpected keyword of type #%d before a '('\n", parser->previous_token->as_Keyword.keyword_type);
+								exit(1);
 							}
 							parser->parsed_node = node;
 							parser_consume_token_at(&parser->previous_token);
 							parser->mode = PSMD_WAIT_POP;
 							parser->call_iteration = 0;
 							parser_push_state(parser);
+							parser->pop_before_semicolon = true;
 						}
 						break;
 					case TOKENTYPE_Identifier: {
@@ -306,12 +343,41 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 				}
 				break;
 			case TOKENTYPE_Keyword: {
-					if (parser->expression_end || parser->previous_token) {
-						fprintf(stderr, "Expecting a separator, got keyword #%d\n", parser->token->as_Keyword.keyword_type);
-						exit(1);
+					switch (parser->token->as_Keyword.keyword_type) {
+					case KWTT_WHILE:
+					case KWTT_IF:
+						if (parser->expression_end || parser->previous_token) {
+							fprintf(stderr, "Expecting a separator, got keyword #%d\n", parser->token->as_Keyword.keyword_type);
+							exit(1);
+						}
+						parser->previous_token = parser->token;
+						parser->token = NULL;
+						break;
+					case KWTT_FUNCTION:
+					case KWTT_CALL:;
+						ExprNode * node = allocate_expr_node();
+						switch (parser->token->as_Keyword.keyword_type) {
+						case KWTT_FUNCTION:
+							node->node_type = EXPRNODE_UserFunctionDef;
+							node->as_UserFunctionDef.name = NULL;
+							node->as_UserFunctionDef.args.entries = NULL;
+							node->as_UserFunctionDef.args.length = 0;
+							node->as_UserFunctionDef.body = NULL;
+							break;
+						case KWTT_CALL:
+							node->node_type = EXPRNODE_UserFunctionCall;
+							node->as_UserFunctionCall.name = NULL;
+							node->as_UserFunctionCall.arg_count = 0;
+							node->as_UserFunctionCall.args = NULL;
+							break;
+						default:
+							break;
+						}
+						parser->parsed_node = node;
+						parser_consume_token(parser);
+						parser->mode = PSMD_GET_IDENTIFIER;
+						break;
 					}
-					parser->previous_token = parser->token;
-					parser->token = NULL;
 				}
 				break;
 			case TOKENTYPE_Number: {
@@ -364,7 +430,6 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 					parser->after_comma = false;
 					parser_push_state(parser);
 					parser->pop_on_comma = true;
-					parser->stack_terminator = ')';
 				} else {
 					parser_consume_token(parser);
 					if (parser->call_iteration != (int64_t) parser->parsed_node->as_FunctionApplication.arg_count) {
@@ -436,6 +501,7 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 					parser->popped_parsed_node = NULL;
 					parser->call_iteration = 1;
 					parser_push_state(parser);
+					parser->pop_before_semicolon = true;
 					parser->mode = PSMD_NORMAL;
 				} else {
 					parser->parsed_node->as_CondIf.body = parser->popped_parsed_node;  // MOVE
@@ -444,20 +510,139 @@ parser_feed(Parser * parser, char * ptr, size_t length)
 					parser->mode = PSMD_NORMAL;
 				}
 				break;
+			case EXPRNODE_UserFunctionCall:
+				if (parser->popped_parsed_node) {
+					uint64_t index = parser->parsed_node->as_UserFunctionCall.arg_count++;
+					if (!index) {
+						if (parser->parsed_node->as_UserFunctionCall.args) {
+							free(parser->parsed_node->as_UserFunctionCall.args);
+						}
+						parser->parsed_node->as_UserFunctionCall.args = parser->popped_parsed_node;  // MOVE
+					} else {
+						parser->parsed_node->as_UserFunctionCall.args = reallocarray(parser->parsed_node->as_UserFunctionCall.args, index + 1, sizeof(ExprNode));
+						if (!parser->parsed_node->as_UserFunctionCall.args) {
+							fprintf(stderr, "Failed to resize user function call argument array\n");
+							exit(1);
+						}
+						parser->parsed_node->as_UserFunctionCall.args[index] = *parser->popped_parsed_node;  // MOVE contents
+						free(parser->popped_parsed_node);  // FREE extra pointer
+					}
+					parser->popped_parsed_node = NULL;
+				}
+				if (parser->token && parser->token->token_type == TOKENTYPE_RParen) {
+					parser_consume_token(parser);
+					parser->call_iteration = 0;
+					parser->expression_end = true;
+					parser->mode = PSMD_NORMAL;
+				} else {
+					parser->after_comma = false;
+					parser_push_state(parser);
+					parser->pop_on_comma = true;
+				}
+				parser->after_comma = false;
+				break;
+			case EXPRNODE_UserFunctionDef:
+				if (!parser->call_iteration) {
+					// Arguments
+					// TODO somehow use PSMD_GET_IDENTIFIER instead of destroying Variable expressions?
+					if (parser->popped_parsed_node) {
+						if (parser->popped_parsed_node->node_type != EXPRNODE_Variable) {
+							fprintf(stderr, "Expected variable expression as formal argument, got type %s\n", expr_node_types[parser->popped_parsed_node->node_type]);
+							exit(1);
+						}
+						uint64_t index = parser->parsed_node->as_UserFunctionDef.args.length++;
+						parser->parsed_node->as_UserFunctionDef.args.entries = reallocarray(parser->parsed_node->as_UserFunctionDef.args.entries, index + 1, sizeof(ArgumentsDefEntry));
+						if (!parser->parsed_node->as_UserFunctionDef.args.entries) {
+							fprintf(stderr, "Failed to resize user function formal argument array\n");
+							exit(1);
+						}
+						parser->parsed_node->as_UserFunctionDef.args.entries[index] = (ArgumentsDefEntry) {
+							.name = parser->popped_parsed_node->as_Variable.name,  // MOVE
+						};
+						free(parser->popped_parsed_node);
+						parser->popped_parsed_node = NULL;
+					}
+					if (parser->token && parser->token->token_type == TOKENTYPE_RParen) {
+						parser_consume_token(parser);
+						parser->call_iteration = 1;
+						parser_push_state(parser);
+						parser->pop_before_semicolon = true;
+						parser->mode = PSMD_NORMAL;
+					} else {
+						parser->after_comma = false;
+						parser_push_state(parser);
+						parser->pop_on_comma = true;
+					}
+					parser->after_comma = false;
+				} else {
+					// Body
+					parser->parsed_node->as_UserFunctionDef.body = parser->popped_parsed_node;  // MOVE
+					parser->popped_parsed_node = NULL;
+					parser->expression_end = true;
+					parser->mode = PSMD_NORMAL;
+				}
+				break;
 			default:
-				fprintf(stderr, "Unexpected PSMD_WAIT_POP\n");
+				fprintf(stderr, "Unexpected PSMD_WAIT_POP with expression of type #%d\n", parser->parsed_node->node_type);
 				exit(1);
 			}
 			break;
 		case PSMD_GROUP:
 			if (parser->token->token_type != TOKENTYPE_RParen) {
-				fprintf(stderr, "Expected ')', got type %d\n", parser->token->token_type);
+				fprintf(stderr, "Expected ')', got type %s\n", token_type_names[parser->token->token_type]);
 				exit(1);
 			}
 			parser_consume_token(parser);
 			parser->mode = PSMD_NORMAL;
 			parser->parsed_node = parser->popped_parsed_node;
 			parser->popped_parsed_node = NULL;
+			break;
+		case PSMD_GET_IDENTIFIER: {
+				if (!parser->token) {
+					if (!parser->code_end) {
+						return;
+					}
+					fprintf(stderr, "Expected identifier, got end of input\n");
+					exit(1);
+				}
+				if (parser->token->token_type != TOKENTYPE_Identifier) {
+					fprintf(stderr, "Expected identifier, got type %s\n", token_type_names[parser->token->token_type]);
+					exit(1);
+				}
+				char *name = strndup(parser->token->as_Identifier.name.ptr, parser->token->as_Identifier.name.length);
+				parser_consume_token(parser);
+				switch (parser->parsed_node->node_type) {
+				case EXPRNODE_UserFunctionDef:
+					parser->parsed_node->as_UserFunctionDef.name = name;
+					break;
+				case EXPRNODE_UserFunctionCall:
+					parser->parsed_node->as_UserFunctionCall.name = name;
+					break;
+				default:
+					fprintf(stderr, "Unexpected PSMD_GET_IDENTIFIER with expression of type #%d\n", parser->parsed_node->node_type);
+					exit(1);
+				}
+				parser->mode = PSMD_GET_ARGS;
+			}
+			break;
+		case PSMD_GET_ARGS: {
+				if (!parser->token) {
+					if (!parser->code_end) {
+						return;
+					}
+					fprintf(stderr, "Expected '(', got end of input\n");
+					exit(1);
+				}
+				if (parser->token->token_type != TOKENTYPE_LParen) {
+					fprintf(stderr, "Expected '(', got type %s\n", token_type_names[parser->token->token_type]);
+					exit(1);
+				}
+				parser_consume_token(parser);
+				parser->mode = PSMD_WAIT_POP;
+				parser->call_iteration = 0;
+				parser_push_state(parser);
+				parser->pop_on_comma = true;
+			}
 			break;
 		}
 	}
@@ -475,16 +660,7 @@ parser_end(Parser * parser)
 		parser_feed(parser, NULL, 0);
 	}
 	if (!parser->parsed_node) {
-		ExprNode * statement_list_node = malloc(sizeof(ExprNode));
-		if (!statement_list_node) {
-			fprintf(stderr, "Failed to allocate expression node\n");
-			exit(1);
-		}
-		statement_list_node->destructor = parsed_expr_node_destructor;
-		statement_list_node->node_type = EXPRNODE_StatementList;
-		statement_list_node->as_StatementList.length = 0;
-		statement_list_node->as_StatementList.args = NULL;
-		parser->parsed_node = statement_list_node;
+		parser->parsed_node = make_noop_expr();
 	}
 	return parser->parsed_node;
 }

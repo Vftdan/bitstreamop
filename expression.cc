@@ -201,4 +201,87 @@ BITSTREAMOP_EXPRNODE(CondIf, (
 	}
 ))
 
+BITSTREAMOP_EXPRNODE(UserFunctionCall, (
+	uint64_t arg_count;
+	char *name;
+	struct expression_node *args;
+), self, ctx, result, (
+	struct userfunclist_node *func = userfunclist_find_function(ctx->user_functions, self->name);
+	if (!func) {
+		die("User function is not defined");
+	}
+	size_t n = self->arg_count;
+	if (n != func->args_def.length) {
+		die("Wrong argument count");
+	}
+	InterpScope caller_scope = ctx->scope;
+	scope_push(&ctx->scope);
+	InterpScope function_scope = ctx->scope;
+	ctx->scope = caller_scope;
+	for (uint64_t i = 0; i < n; ++i) {
+		WidthInteger arg_value = EVALUATE(self->args[i]);
+		scope_assign_variable(&function_scope, func->args_def.entries[i].name, arg_value);
+	}
+	ctx->scope = function_scope;
+	*result = EVALUATE(*func->body);
+	scope_pop(&ctx->scope);
+), printer, (
+	printer->start_field(printer);
+	printer->printf(printer, "name = %s", self->name);
+	printer->end_field(printer);
+
+	printer->start_field(printer);
+	printer->printf(printer, "arg_count = %llu", self->arg_count);
+	printer->end_field(printer);
+
+	if (!self->args) {
+		printer->start_field(printer);
+		printer->printf(printer, "args = %p", self->args);
+		printer->end_field(printer);
+	} else {
+		for (uint64_t i = 0; i < self->arg_count; ++i) {
+			printer->start_field(printer);
+			printer->printf(printer, "args[%llu] =", i);
+			printer->end_field(printer);
+			PRINT_CHILD(self->args[i]);
+		}
+	}
+))
+
+BITSTREAMOP_EXPRNODE(UserFunctionDef, (
+	char *name;
+	struct expression_node *body;
+	ArgumentsDef args;
+), self, ctx, result, (
+	// TODO consider using reassign-like logic
+	userfunclist_add_function(&ctx->user_functions, self->name, self->args, self->body);
+), printer, (
+	printer->start_field(printer);
+	printer->printf(printer, "name = %s", self->name);
+	printer->end_field(printer);
+
+	printer->start_field(printer);
+	printer->printf(printer, "args.length = %llu", self->args.length);
+	printer->end_field(printer);
+
+	if (!self->args.entries) {
+		printer->start_field(printer);
+		printer->printf(printer, "args.entries = %p", self->args);
+		printer->end_field(printer);
+	} else {
+		for (uint64_t i = 0; i < self->args.length; ++i) {
+			printer->start_field(printer);
+			printer->printf(printer, "args.entries[%llu].name = %s", i, self->args.entries[i].name);
+			printer->end_field(printer);
+		}
+	}
+
+	printer->start_field(printer);
+	printer->printf(printer, "body = %p", self->body);
+	printer->end_field(printer);
+	if (self->body) {
+		PRINT_CHILD(*self->body);
+	}
+))
+
 #endif
