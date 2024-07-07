@@ -18,7 +18,9 @@ fix_width(WidthInteger value)
 	if (!value.width) {
 		value.value = 0;
 	}
-	value.value &= (1ULL << value.width) - 1;
+	if (value.width < 64) {
+		value.value &= (1ULL << value.width) - 1;
+	}
 	return value;
 }
 
