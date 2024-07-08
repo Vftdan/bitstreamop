@@ -4,22 +4,27 @@ BITSTREAMOP_EXPRNODE(FunctionApplication, (
 	uint64_t arg_count;
 	FunctionTableEntry *func;
 	struct expression_node *args;
-), self, ctx, result, (
-	size_t n = self->arg_count;
-	if (n != self->func->args_def.length) {
+), (
+	size_t n, i;
+	WidthInteger *arg_values;
+), self, L, ctx, result, (
+	L->n = self->arg_count;
+	if (L->n != self->func->args_def.length) {
 		die("Wrong argument count");
 	}
-	WidthInteger *arg_values = calloc(n, sizeof(WidthInteger));
-	if (!arg_values) {
+	L->arg_values = calloc(L->n, sizeof(WidthInteger));
+	if (!L->arg_values) {
 		die("Failed to allocate argument values");
 	}
-	for (uint64_t i = 0; i < n; ++i) {
-		arg_values[i] = EVALUATE(self->args[i]);
+	L->i = 0;
+CONTINUATION(1)
+	for (; L->i < L->n; ++L->i) {
+		EVALUATE(L->arg_values[L->i], self->args[L->i], 1);
 	}
 	scope_push(&ctx->scope);
-	*result = self->func->impl(ctx, arg_values);
+	*result = self->func->impl(ctx, L->arg_values);
 	scope_pop(&ctx->scope);
-	free(arg_values);
+	free(L->arg_values);
 ), printer, (
 	printer->start_field(printer);
 	printer->printf(printer, "arg_count = %llu", self->arg_count);
@@ -48,7 +53,7 @@ BITSTREAMOP_EXPRNODE(FunctionApplication, (
 
 BITSTREAMOP_EXPRNODE(Literal, (
 	WidthInteger value;
-), self, ctx, result, (
+), (), self, L, ctx, result, (
 	*result = self->value;
 ), printer, (
 	printer->start_field(printer);
@@ -59,10 +64,12 @@ BITSTREAMOP_EXPRNODE(Literal, (
 BITSTREAMOP_EXPRNODE(Assign, (
 	char *name;
 	struct expression_node *rhs;
-), self, ctx, result, (
-	WidthInteger value = EVALUATE(*self->rhs);
-	scope_assign_variable(&ctx->scope, self->name, value);
-	*result = value;
+), (
+	WidthInteger value;
+), self, L, ctx, result, (
+	EVALUATE(L->value, *self->rhs, 0);
+	scope_assign_variable(&ctx->scope, self->name, L->value);
+	*result = L->value;
 ), printer, (
 	printer->start_field(printer);
 	printer->printf(printer, "name = %s", self->name);
@@ -80,19 +87,21 @@ BITSTREAMOP_EXPRNODE(Assign, (
 BITSTREAMOP_EXPRNODE(Reassign, (
 	char *name;
 	struct expression_node *rhs;
-), self, ctx, result, (
-	WidthInteger value = EVALUATE(*self->rhs);
+), (
+	WidthInteger value;
+), self, L, ctx, result, (
+	EVALUATE(L->value, *self->rhs, 0);
 	WidthInteger *ptr = scope_find_variable(&ctx->scope, self->name);
 	if (ptr) {
-		*ptr = value;
+		*ptr = L->value;
 	} else {
 		InterpScope * scope = &ctx->scope;
 		while (scope->call_parent) {
 			scope = scope->call_parent;
 		}
-		scope_assign_variable(scope, self->name, value);
+		scope_assign_variable(scope, self->name, L->value);
 	}
-	*result = value;
+	*result = L->value;
 ), printer, (
 	printer->start_field(printer);
 	printer->printf(printer, "name = %s", self->name);
@@ -108,7 +117,7 @@ BITSTREAMOP_EXPRNODE(Reassign, (
 
 BITSTREAMOP_EXPRNODE(Variable, (
 	char *name;
-), self, ctx, result, (
+), (), self, L, ctx, result, (
 	WidthInteger *ptr = scope_find_variable(&ctx->scope, self->name);
 	if (!ptr) {
 		die("Variable not found");
@@ -123,13 +132,17 @@ BITSTREAMOP_EXPRNODE(Variable, (
 BITSTREAMOP_EXPRNODE(StatementList, (
 	uint64_t length;
 	struct expression_node *args;
-), self, ctx, result, (
+), (
+	WidthInteger value;
+	uint64_t i;
+), self, L, ctx, result, (
+	L->i = 0;
+CONTINUATION(1)
 	if (self->length) {
-		WidthInteger value;
-		for (uint64_t i = 0; i < self->length; ++i) {
-			value = EVALUATE(self->args[i]);
+		for (; L->i < self->length; ++L->i) {
+			EVALUATE(L->value, self->args[L->i], 1);
 		}
-		*result = value;
+		*result = L->value;
 	}
 ), printer, (
 	printer->start_field(printer);
@@ -152,12 +165,16 @@ BITSTREAMOP_EXPRNODE(StatementList, (
 
 BITSTREAMOP_EXPRNODE(LoopWhile, (
 	struct expression_node *condition, *body;
-), self, ctx, result, (
+), (
+	WidthInteger condition;
+), self, L, ctx, result, (
 	scope_push(&ctx->scope);
-	WidthInteger condition = EVALUATE(*self->condition);
-	while (condition.value) {
-		*result = EVALUATE(*self->body);
-		condition = EVALUATE(*self->condition);
+CONTINUATION(1)
+	EVALUATE(L->condition, *self->condition, 1);
+CONTINUATION(2)
+	if (L->condition.value) {
+		EVALUATE(*result, *self->body, 2);
+		EVALUATE(L->condition, *self->condition, 1);
 	}
 	scope_pop(&ctx->scope);
 ), printer, (
@@ -178,11 +195,15 @@ BITSTREAMOP_EXPRNODE(LoopWhile, (
 
 BITSTREAMOP_EXPRNODE(CondIf, (
 	struct expression_node *condition, *body;
-), self, ctx, result, (
+), (
+	WidthInteger condition;
+), self, L, ctx, result, (
 	scope_push(&ctx->scope);
-	WidthInteger condition = EVALUATE(*self->condition);
-	if (condition.value) {
-		*result = EVALUATE(*self->body);
+CONTINUATION(1)
+	EVALUATE(L->condition, *self->condition, 1);
+CONTINUATION(2)
+	if (L->condition.value) {
+		EVALUATE(*result, *self->body, 2);
 	}
 	scope_pop(&ctx->scope);
 ), printer, (
@@ -205,25 +226,33 @@ BITSTREAMOP_EXPRNODE(UserFunctionCall, (
 	uint64_t arg_count;
 	char *name;
 	struct expression_node *args;
-), self, ctx, result, (
-	struct userfunclist_node *func = userfunclist_find_function(ctx->user_functions, self->name);
-	if (!func) {
+), (
+	struct userfunclist_node *func;
+	size_t n, i;
+	InterpScope caller_scope, function_scope;
+	WidthInteger arg_value;
+), self, L, ctx, result, (
+	L->func = userfunclist_find_function(ctx->user_functions, self->name);
+	if (!L->func) {
 		die("User function is not defined");
 	}
-	size_t n = self->arg_count;
-	if (n != func->args_def.length) {
+	L->n = self->arg_count;
+	if (L->n != L->func->args_def.length) {
 		die("Wrong argument count");
 	}
-	InterpScope caller_scope = ctx->scope;
+	L->caller_scope = ctx->scope;
 	scope_push(&ctx->scope);
-	InterpScope function_scope = ctx->scope;
-	ctx->scope = caller_scope;
-	for (uint64_t i = 0; i < n; ++i) {
-		WidthInteger arg_value = EVALUATE(self->args[i]);
-		scope_assign_variable(&function_scope, func->args_def.entries[i].name, arg_value);
+	L->function_scope = ctx->scope;
+	ctx->scope = L->caller_scope;
+	L->i = 0;
+CONTINUATION(1)
+	for (; L->i < L->n; ++L->i) {
+		EVALUATE(L->arg_value, self->args[L->i], 1);
+		scope_assign_variable(&L->function_scope, L->func->args_def.entries[L->i].name, L->arg_value);
 	}
-	ctx->scope = function_scope;
-	*result = EVALUATE(*func->body);
+	ctx->scope = L->function_scope;
+CONTINUATION(2)
+	EVALUATE(*result, *L->func->body, 2);
 	scope_pop(&ctx->scope);
 ), printer, (
 	printer->start_field(printer);
@@ -252,7 +281,7 @@ BITSTREAMOP_EXPRNODE(UserFunctionDef, (
 	char *name;
 	struct expression_node *body;
 	ArgumentsDef args;
-), self, ctx, result, (
+), (), self, L, ctx, result, (
 	// TODO consider using reassign-like logic
 	userfunclist_add_function(&ctx->user_functions, self->name, self->args, self->body);
 ), printer, (

@@ -8,19 +8,19 @@
 
 struct expression_node;
 
-#define BITSTREAMOP_EXPRNODE(name, elements, self, ctx, result, evalimpl, printer, printimpl) typedef struct { EXPRESSION_H__UNPACK elements } name##ExprNode;
+#define BITSTREAMOP_EXPRNODE(name, elements, co_locals_def, self, co_locals_var, ctx, result, evalimpl, printer, printimpl) typedef struct { EXPRESSION_H__UNPACK elements } name##ExprNode;
 #include "expression.cc"
 #undef BITSTREAMOP_EXPRNODE
 
 typedef struct expression_node {
 	enum expr_node_type {
-#define BITSTREAMOP_EXPRNODE(name, elements, self, ctx, result, evalimpl, printer, printimpl) EXPRNODE_##name,
+#define BITSTREAMOP_EXPRNODE(name, elements, co_locals_def, self, co_locals_var, ctx, result, evalimpl, printer, printimpl) EXPRNODE_##name,
 #include "expression.cc"
 #undef BITSTREAMOP_EXPRNODE
 	} node_type;
 	void (*destructor)(struct expression_node * self);
 	union {
-#define BITSTREAMOP_EXPRNODE(name, elements, self, ctx, result, evalimpl, printer, printimpl) name##ExprNode as_##name;
+#define BITSTREAMOP_EXPRNODE(name, elements, co_locals_def, self, co_locals_var, ctx, result, evalimpl, printer, printimpl) name##ExprNode as_##name;
 #include "expression.cc"
 #undef BITSTREAMOP_EXPRNODE
 	};
